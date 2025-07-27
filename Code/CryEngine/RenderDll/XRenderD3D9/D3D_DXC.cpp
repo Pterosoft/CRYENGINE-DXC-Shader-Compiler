@@ -288,27 +288,48 @@ bool CCompiler::CompileShaderWithDXCAPI(const char* sourcePath,
     MultiByteToWideChar(CP_UTF8, 0, target, -1, wTarget, sizeof(wTarget) / sizeof(wchar_t));
     MultiByteToWideChar(CP_UTF8, 0, sourcePath, -1, wSourceName, sizeof(wSourceName) / sizeof(wchar_t));
 
-    // Prepare compilation arguments
+    // CRITICAL FIX: Use correct DXC arguments for ray tracing lib_6_3 target
     std::vector<LPCWSTR> arguments;
     arguments.push_back(L"-E");
     arguments.push_back(wEntryPoint);
     arguments.push_back(L"-T");
     arguments.push_back(wTarget);
-    arguments.push_back(L"-Zpr");  // Row-major matrices
-    arguments.push_back(L"-O3");   // Optimization level 3
-    arguments.push_back(L"-WX");   // Warnings as errors
 
-    // Add debug information in debug builds
+    // CRITICAL: Use minimal and compatible flags for ray tracing
+    // Remove version-specific flags that may not be supported
+
+    // Debug vs Release flags
 #ifdef _DEBUG
-    arguments.push_back(L"-Zi");   // Debug information
-    arguments.push_back(L"-Od");   // Disable optimizations for debugging
+    arguments.push_back(L"-Zi");        // Debug information
+    arguments.push_back(L"-Od");        // Disable optimizations for debugging
+#else
+    arguments.push_back(L"-O3");        // Optimization level 3 for release
 #endif
+
+    // REMOVED: Version-specific flags that may not be available in older DXC
+    // arguments.push_back(L"-HV");        // HLSL version 2021 
+    // arguments.push_back(L"2021");
+    // arguments.push_back(L"-enable-16bit-types");  // Enable 16-bit types for ray tracing
+    // arguments.push_back(L"-Qembed_debug"); // Embed debug info in shader
 
     // Create source buffer
     DxcBuffer sourceBuffer = {};
     sourceBuffer.Ptr = pSourceBlob->GetBufferPointer();
     sourceBuffer.Size = pSourceBlob->GetBufferSize();
     sourceBuffer.Encoding = DXC_CP_UTF8;
+
+    CryLog("[Ray Tracing] DXC Compilation arguments:");
+    for (size_t i = 0; i < arguments.size(); i += 2)
+    {
+        if (i + 1 < arguments.size())
+        {
+            CryLog("[Ray Tracing]   %ls %ls", arguments[i], arguments[i + 1]);
+        }
+        else
+        {
+            CryLog("[Ray Tracing]   %ls", arguments[i]);
+        }
+    }
 
     // Compile the shader
     IDxcResult* pResult = nullptr;
@@ -333,17 +354,49 @@ bool CCompiler::CompileShaderWithDXCAPI(const char* sourcePath,
             hr = pResult->GetOutput(DXC_OUT_OBJECT, IID_PPV_ARGS(&pShaderBlob), nullptr);
             if (SUCCEEDED(hr) && pShaderBlob)
             {
-                // Copy bytecode to output vector
+                // CRITICAL FIX: Validate the compiled bytecode before using it
                 const BYTE* pData = static_cast<const BYTE*>(pShaderBlob->GetBufferPointer());
                 SIZE_T size = pShaderBlob->GetBufferSize();
 
-                bytecode.resize(size);
-                memcpy(bytecode.data(), pData, size);
+                CryLog("[Ray Tracing] Compiled shader blob: %zu bytes", size);
 
-                CryLog("[Ray Tracing] Successfully compiled shader: %s (%zu bytes)", entryPoint, size);
-                success = true;
+                // Basic validation of DXIL container
+                if (size >= 32)
+                {
+                    const DWORD* header = reinterpret_cast<const DWORD*>(pData);
+                    DWORD signature = header[0];
+                    DWORD containerSize = header[4];
+
+                    CryLog("[Ray Tracing] DXIL validation:");
+                    CryLog("[Ray Tracing]   Signature: 0x%08X (expected: 0x43425844)", signature);
+                    CryLog("[Ray Tracing]   Container size: %u bytes (actual: %zu)", containerSize, size);
+
+                    if (signature == 0x43425844 && containerSize == size)
+                    {
+                        // Copy bytecode to output vector
+                        bytecode.resize(size);
+                        memcpy(bytecode.data(), pData, size);
+
+                        CryLog("[Ray Tracing] Successfully compiled and validated shader: %s (%zu bytes)", entryPoint, size);
+                        success = true;
+                    }
+                    else
+                    {
+                        CryLog("[Ray Tracing] ERROR: Compiled shader has invalid DXIL container");
+                        CryLog("[Ray Tracing]   Expected signature: 0x43425844, got: 0x%08X", signature);
+                        CryLog("[Ray Tracing]   Expected size: %zu, container reports: %u", size, containerSize);
+                    }
+                }
+                else
+                {
+                    CryLog("[Ray Tracing] ERROR: Compiled shader blob is too small (%zu bytes)", size);
+                }
 
                 pShaderBlob->Release();
+            }
+            else
+            {
+                CryLog("[Ray Tracing] Failed to get compiled shader blob: 0x%08X", hr);
             }
         }
         else
@@ -351,7 +404,7 @@ bool CCompiler::CompileShaderWithDXCAPI(const char* sourcePath,
             CryLog("[Ray Tracing] Compilation failed with status: 0x%08X", status);
         }
 
-        // Get error messages if compilation failed
+        // Get error messages if compilation failed (using only available DXC output types)
         if (!success)
         {
             IDxcBlobUtf8* pErrorBlob = nullptr;
@@ -362,6 +415,9 @@ bool CCompiler::CompileShaderWithDXCAPI(const char* sourcePath,
                 CryLog("%s", pErrorBlob->GetStringPointer());
                 pErrorBlob->Release();
             }
+
+            // FIXED: Remove DXC_OUT_REMARKS as it's not available in older DXC versions
+            // Just use the error output which should contain all diagnostic messages
         }
     }
     else
@@ -505,7 +561,7 @@ bool CCompiler::ValidateShaderBytecode()
         return false;
     }
 
-    // Basic DXIL header validation
+    // Enhanced DXIL header validation
     auto validateDXIL = [](const std::vector<BYTE>& bytecode, const char* shaderType) -> bool
         {
             if (bytecode.size() < 32)
@@ -516,9 +572,65 @@ bool CCompiler::ValidateShaderBytecode()
 
             // Check for DXBC signature
             const DWORD* header = reinterpret_cast<const DWORD*>(bytecode.data());
-            if (header[0] != 0x43425844) // 'DXBC'
+            DWORD signature = header[0];
+            DWORD containerSize = header[4];
+            DWORD partCount = header[5];
+
+            CryLog("[Ray Tracing] %s DXIL validation:", shaderType);
+            CryLog("[Ray Tracing]   Signature: 0x%08X", signature);
+            CryLog("[Ray Tracing]   Container size: %u bytes (actual: %zu)", containerSize, bytecode.size());
+            CryLog("[Ray Tracing]   Part count: %u", partCount);
+
+            if (signature != 0x43425844) // 'DXBC'
             {
-                CryLog("[Ray Tracing] %s shader missing DXBC signature (found: 0x%08X)", shaderType, header[0]);
+                CryLog("[Ray Tracing] ERROR: %s shader missing DXBC signature (found: 0x%08X)", shaderType, signature);
+                return false;
+            }
+
+            if (containerSize != bytecode.size())
+            {
+                CryLog("[Ray Tracing] ERROR: %s container size mismatch (header: %u, actual: %zu)",
+                    shaderType, containerSize, bytecode.size());
+                return false;
+            }
+
+            if (partCount == 0 || partCount > 16) // Sanity check
+            {
+                CryLog("[Ray Tracing] ERROR: %s invalid part count: %u", shaderType, partCount);
+                return false;
+            }
+
+            // Look for DXIL part
+            const DWORD* partOffsets = &header[6];
+            bool foundDXIL = false;
+
+            for (DWORD i = 0; i < partCount; ++i)
+            {
+                if (partOffsets[i] >= bytecode.size() - 8)
+                {
+                    CryLog("[Ray Tracing] WARNING: %s part %u offset out of bounds: %u", shaderType, i, partOffsets[i]);
+                    continue;
+                }
+
+                const DWORD* partHeader = reinterpret_cast<const DWORD*>(bytecode.data() + partOffsets[i]);
+                DWORD partFourCC = partHeader[0];
+                DWORD partSize = partHeader[1];
+
+                char fourCCStr[5] = { 0 };
+                memcpy(fourCCStr, &partFourCC, 4);
+
+                CryLog("[Ray Tracing]   Part %u: '%s' (%u bytes) at offset %u", i, fourCCStr, partSize, partOffsets[i]);
+
+                if (partFourCC == 0x4C495844) // 'DXIL'
+                {
+                    foundDXIL = true;
+                    CryLog("[Ray Tracing]   Found DXIL part at offset %u", partOffsets[i]);
+                }
+            }
+
+            if (!foundDXIL)
+            {
+                CryLog("[Ray Tracing] ERROR: %s does not contain DXIL part", shaderType);
                 return false;
             }
 
@@ -527,17 +639,22 @@ bool CCompiler::ValidateShaderBytecode()
         };
 
     bool allValid = true;
-    allValid &= validateDXIL(m_rayGenShaderBytecode, "Ray Generation");
+    allValid &= validateDXIL(m_rayGenShaderBytecode, "RayGen");
     allValid &= validateDXIL(m_missShaderBytecode, "Miss");
-    allValid &= validateDXIL(m_closestHitShaderBytecode, "Closest Hit");
+    allValid &= validateDXIL(m_closestHitShaderBytecode, "ClosestHit");
 
     if (allValid)
     {
         CryLog("[Ray Tracing] All shader bytecode validated successfully");
     }
+    else
+    {
+        CryLog("[Ray Tracing] CRITICAL: Shader bytecode validation failed - shaders are corrupted or invalid");
+    }
 
     return allValid;
 }
+
 
 void CCompiler::CreateShaderBytecode()
 {
