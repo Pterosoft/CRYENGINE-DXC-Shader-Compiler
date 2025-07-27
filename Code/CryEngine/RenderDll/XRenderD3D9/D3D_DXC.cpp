@@ -306,240 +306,6 @@ bool CCompiler::CompileShaderWithDXCAPI(const char* sourcePath,
     arguments.push_back(L"-O3");        // Optimization level 3 for release
 #endif
 
-    // REMOVED: Version-specific flags that may not be available in older DXC
-    // arguments.push_back(L"-HV");        // HLSL version 2021 
-    // arguments.push_back(L"2021");
-    // arguments.push_back(L"-enable-16bit-types");  // Enable 16-bit types for ray tracing
-    // arguments.push_back(L"-Qembed_debug"); // Embed debug info in shader
-
-    // Create source buffer
-    DxcBuffer sourceBuffer = {};
-    sourceBuffer.Ptr = pSourceBlob->GetBufferPointer();
-    sourceBuffer.Size = pSourceBlob->GetBufferSize();
-    sourceBuffer.Encoding = DXC_CP_UTF8;
-
-    CryLog("[Ray Tracing] DXC Compilation arguments:");
-    for (size_t i = 0; i < arguments.size(); i += 2)
-    {
-        if (i + 1 < arguments.size())
-        {
-            CryLog("[Ray Tracing]   %ls %ls", arguments[i], arguments[i + 1]);
-        }
-        else
-        {
-            CryLog("[Ray Tracing]   %ls", arguments[i]);
-        }
-    }
-
-    // Compile the shader
-    IDxcResult* pResult = nullptr;
-    hr = pCompiler->Compile(
-        &sourceBuffer,
-        arguments.data(),
-        static_cast<UINT32>(arguments.size()),
-        pIncludeHandler,
-        IID_PPV_ARGS(&pResult)
-    );
-
-    bool success = false;
-    if (SUCCEEDED(hr))
-    {
-        // Check compilation status
-        HRESULT status;
-        hr = pResult->GetStatus(&status);
-        if (SUCCEEDED(hr) && SUCCEEDED(status))
-        {
-            // Get the compiled object
-            IDxcBlob* pShaderBlob = nullptr;
-            hr = pResult->GetOutput(DXC_OUT_OBJECT, IID_PPV_ARGS(&pShaderBlob), nullptr);
-            if (SUCCEEDED(hr) && pShaderBlob)
-            {
-                // CRITICAL FIX: Validate the compiled bytecode before using it
-                const BYTE* pData = static_cast<const BYTE*>(pShaderBlob->GetBufferPointer());
-                SIZE_T size = pShaderBlob->GetBufferSize();
-
-                CryLog("[Ray Tracing] Compiled shader blob: %zu bytes", size);
-
-                // Basic validation of DXIL container
-                if (size >= 32)
-                {
-                    const DWORD* header = reinterpret_cast<const DWORD*>(pData);
-                    DWORD signature = header[0];
-                    DWORD containerSize = header[4];
-
-                    CryLog("[Ray Tracing] DXIL validation:");
-                    CryLog("[Ray Tracing]   Signature: 0x%08X (expected: 0x43425844)", signature);
-                    CryLog("[Ray Tracing]   Container size: %u bytes (actual: %zu)", containerSize, size);
-
-                    if (signature == 0x43425844 && containerSize == size)
-                    {
-                        // Copy bytecode to output vector
-                        bytecode.resize(size);
-                        memcpy(bytecode.data(), pData, size);
-
-                        CryLog("[Ray Tracing] Successfully compiled and validated shader: %s (%zu bytes)", entryPoint, size);
-                        success = true;
-                    }
-                    else
-                    {
-                        CryLog("[Ray Tracing] ERROR: Compiled shader has invalid DXIL container");
-                        CryLog("[Ray Tracing]   Expected signature: 0x43425844, got: 0x%08X", signature);
-                        CryLog("[Ray Tracing]   Expected size: %zu, container reports: %u", size, containerSize);
-                    }
-                }
-                else
-                {
-                    CryLog("[Ray Tracing] ERROR: Compiled shader blob is too small (%zu bytes)", size);
-                }
-
-                pShaderBlob->Release();
-            }
-            else
-            {
-                CryLog("[Ray Tracing] Failed to get compiled shader blob: 0x%08X", hr);
-            }
-        }
-        else
-        {
-            CryLog("[Ray Tracing] Compilation failed with status: 0x%08X", status);
-        }
-
-        // Get error messages if compilation failed (using only available DXC output types)
-        if (!success)
-        {
-            IDxcBlobUtf8* pErrorBlob = nullptr;
-            hr = pResult->GetOutput(DXC_OUT_ERRORS, IID_PPV_ARGS(&pErrorBlob), nullptr);
-            if (SUCCEEDED(hr) && pErrorBlob && pErrorBlob->GetStringLength() > 0)
-            {
-                CryLog("[Ray Tracing] Compilation errors:");
-                CryLog("%s", pErrorBlob->GetStringPointer());
-                pErrorBlob->Release();
-            }
-
-            // FIXED: Remove DXC_OUT_REMARKS as it's not available in older DXC versions
-            // Just use the error output which should contain all diagnostic messages
-        }
-    }
-    else
-    {
-        CryLog("[Ray Tracing] Failed to compile shader: 0x%08X", hr);
-    }
-
-    // Cleanup
-    if (pResult) pResult->Release();
-    pSourceBlob->Release();
-    pIncludeHandler->Release();
-    pCompiler->Release();
-    pUtils->Release();
-
-    return success;
-}
-
-// Keep the external DXC method as fallback
-bool CCompiler::CompileShaderWithDXCAPI(const char* sourcePath,
-    const char* entryPoint,
-    const char* target,
-    std::vector<BYTE>& bytecode)
-{
-    CryLog("[Ray Tracing] Compiling HLSL using DXC COM API: %s", sourcePath);
-
-    HRESULT hr = S_OK;
-
-    // Initialize COM if not already initialized
-    static bool comInitialized = false;
-    if (!comInitialized)
-    {
-        hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
-        if (FAILED(hr) && hr != RPC_E_CHANGED_MODE)
-        {
-            CryLog("[Ray Tracing] Failed to initialize COM: 0x%08X", hr);
-            return false;
-        }
-        comInitialized = true;
-    }
-
-    // Create DXC instances
-    IDxcUtils* pUtils = nullptr;
-    IDxcCompiler3* pCompiler = nullptr;
-    IDxcIncludeHandler* pIncludeHandler = nullptr;
-
-    // Create DXC Utils
-    hr = DxcCreateInstance(CLSID_DxcUtils, IID_PPV_ARGS(&pUtils));
-    if (FAILED(hr))
-    {
-        CryLog("[Ray Tracing] Failed to create DXC Utils: 0x%08X", hr);
-        return false;
-    }
-
-    // Create DXC Compiler
-    hr = DxcCreateInstance(CLSID_DxcCompiler, IID_PPV_ARGS(&pCompiler));
-    if (FAILED(hr))
-    {
-        CryLog("[Ray Tracing] Failed to create DXC Compiler: 0x%08X", hr);
-        pUtils->Release();
-        return false;
-    }
-
-    // Create include handler
-    hr = pUtils->CreateDefaultIncludeHandler(&pIncludeHandler);
-    if (FAILED(hr))
-    {
-        CryLog("[Ray Tracing] Failed to create include handler: 0x%08X", hr);
-        pCompiler->Release();
-        pUtils->Release();
-        return false;
-    }
-
-    // Load source file
-    std::vector<BYTE> sourceCode;
-    if (!LoadShaderFile(PathUtil::GetFile(sourcePath), sourceCode))
-    {
-        CryLog("[Ray Tracing] Failed to load shader source: %s", sourcePath);
-        pIncludeHandler->Release();
-        pCompiler->Release();
-        pUtils->Release();
-        return false;
-    }
-
-    // Create source blob
-    IDxcBlobEncoding* pSourceBlob = nullptr;
-    hr = pUtils->CreateBlob(sourceCode.data(), static_cast<UINT32>(sourceCode.size()), DXC_CP_UTF8, &pSourceBlob);
-    if (FAILED(hr))
-    {
-        CryLog("[Ray Tracing] Failed to create source blob: 0x%08X", hr);
-        pIncludeHandler->Release();
-        pCompiler->Release();
-        pUtils->Release();
-        return false;
-    }
-
-    // Convert strings to wide character
-    wchar_t wEntryPoint[128];
-    wchar_t wTarget[32];
-    wchar_t wSourceName[MAX_PATH];
-
-    MultiByteToWideChar(CP_UTF8, 0, entryPoint, -1, wEntryPoint, sizeof(wEntryPoint) / sizeof(wchar_t));
-    MultiByteToWideChar(CP_UTF8, 0, target, -1, wTarget, sizeof(wTarget) / sizeof(wchar_t));
-    MultiByteToWideChar(CP_UTF8, 0, sourcePath, -1, wSourceName, sizeof(wSourceName) / sizeof(wchar_t));
-
-    // CRITICAL FIX: Use correct DXC arguments for ray tracing lib_6_3 target
-    std::vector<LPCWSTR> arguments;
-    arguments.push_back(L"-E");
-    arguments.push_back(wEntryPoint);
-    arguments.push_back(L"-T");
-    arguments.push_back(wTarget);
-
-    // CRITICAL: Use minimal and compatible flags for ray tracing
-    // Remove version-specific flags that may not be supported
-
-    // Debug vs Release flags
-#ifdef _DEBUG
-    arguments.push_back(L"-Zi");        // Debug information
-    arguments.push_back(L"-Od");        // Disable optimizations for debugging
-#else
-    arguments.push_back(L"-O3");        // Optimization level 3 for release
-#endif
-
     // Create source buffer
     DxcBuffer sourceBuffer = {};
     sourceBuffer.Ptr = pSourceBlob->GetBufferPointer();
@@ -725,7 +491,108 @@ bool CCompiler::CompileShaderWithDXCAPI(const char* sourcePath,
     return success;
 }
 
+// Keep the external DXC method as fallback
+bool CCompiler::CompileShaderWithExternalDXC(const char* sourcePath,
+    const char* entryPoint,
+    const char* target,
+    std::vector<BYTE>& bytecode)
+{
+    CryLog("[Ray Tracing] Falling back to external DXC compilation");
 
+    // Use CreateProcess instead of system() to avoid console window
+    string shaderDir = GetEngineShaderDirectory();
+    string outputPath = shaderDir + "temp_compiled.cso";
+
+    // Try to find dxc.exe
+    const char* dxcPaths[] = {
+        "dxc.exe",
+        "C:\\Program Files (x86)\\Windows Kits\\10\\bin\\x64\\dxc.exe",
+        "C:\\Program Files\\Windows Kits\\10\\bin\\x64\\dxc.exe",
+        "C:\\Program Files (x86)\\Windows Kits\\10\\bin\\10.0.19041.0\\x64\\dxc.exe",
+        "C:\\Program Files\\Windows Kits\\10\\bin\\10.0.20348.0\\x64\\dxc.exe",
+        "C:\\Program Files\\Windows Kits\\10\\bin\\10.0.22000.0\\x64\\dxc.exe"
+    };
+
+    string commandLine;
+    commandLine.Format("-T %s -E %s -Fo \"%s\" \"%s\"",
+        target, entryPoint, outputPath.c_str(), sourcePath);
+
+    bool success = false;
+    for (const char* dxcPath : dxcPaths)
+    {
+        CryLog("[Ray Tracing] Trying DXC path: %s", dxcPath);
+
+        STARTUPINFOA si = {};
+        PROCESS_INFORMATION pi = {};
+        si.cb = sizeof(si);
+        si.dwFlags = STARTF_USESHOWWINDOW;
+        si.wShowWindow = SW_HIDE; // Hide the console window
+
+        string fullCommandLine = string(dxcPath) + " " + commandLine;
+
+        if (CreateProcessA(
+            nullptr,                    // Application name
+            (LPSTR)fullCommandLine.c_str(), // Command line
+            nullptr,                    // Process security attributes
+            nullptr,                    // Primary thread security attributes
+            FALSE,                      // Handles are not inherited
+            CREATE_NO_WINDOW,          // Creation flags - no console window
+            nullptr,                    // Environment
+            nullptr,                    // Current directory
+            &si,                        // Startup info
+            &pi))                       // Process information
+        {
+            // Wait for the process to complete
+            WaitForSingleObject(pi.hProcess, INFINITE);
+
+            DWORD exitCode;
+            GetExitCodeProcess(pi.hProcess, &exitCode);
+
+            CloseHandle(pi.hProcess);
+            CloseHandle(pi.hThread);
+
+            if (exitCode == 0)
+            {
+                CryLog("[Ray Tracing] External DXC compilation succeeded");
+
+                // Load the compiled output
+                FILE* fp = fopen(outputPath.c_str(), "rb");
+                if (fp)
+                {
+                    fseek(fp, 0, SEEK_END);
+                    long fileSize = ftell(fp);
+                    fseek(fp, 0, SEEK_SET);
+
+                    if (fileSize > 0)
+                    {
+                        bytecode.resize(fileSize);
+                        size_t bytesRead = fread(bytecode.data(), 1, fileSize, fp);
+                        if (bytesRead == fileSize)
+                        {
+                            success = true;
+                            CryLog("[Ray Tracing] Successfully loaded compiled shader bytecode (%ld bytes)", fileSize);
+                        }
+                    }
+                    fclose(fp);
+                }
+
+                // Clean up temporary file
+                remove(outputPath.c_str());
+                break;
+            }
+            else
+            {
+                CryLog("[Ray Tracing] External DXC compilation failed (exit code: %lu)", exitCode);
+            }
+        }
+        else
+        {
+            CryLog("[Ray Tracing] Failed to launch DXC process: %lu", GetLastError());
+        }
+    }
+
+    return success;
+}
 
 bool CCompiler::ValidateShaderBytecode()
 {
@@ -857,7 +724,7 @@ bool CCompiler::ValidateShaderBytecode()
     }
 
     return allValid;
-}
+};
 
 void CCompiler::CreateShaderBytecode()
 {
