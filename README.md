@@ -55,7 +55,14 @@ This code integrates Microsoft’s DXC shader compiler into CRYENGINE, replacing
 *   Typical location: Engine/Shaders/HWScripts/CryFX/
     
 
-**Compile at init:**_CCompiler compiler;if (!compiler.CompileRayTracingShaders()){    CryLogAlways("\[Ray Tracing\] Compilation failed; check logs for DXC errors.");}// Use compiler.m\_rayGenShaderBytecode, etc. for pipeline creation_**Create DXR state objects:**
+**Compile at init:**
+CCompiler compiler;
+if (!compiler.CompileRayTracingShaders())
+{
+        CryLogAlways("\[Ray Tracing\] Compilation failed; check logs for DXC errors.");
+    }
+    // Use compiler.m\_rayGenShaderBytecode, etc. for pipeline creation
+    _**Create DXR state objects:**
 
 *   Feed D3D12\_SHADER\_BYTECODE structures with .data() and .size() from the compiler’s bytecode vectors.
     
