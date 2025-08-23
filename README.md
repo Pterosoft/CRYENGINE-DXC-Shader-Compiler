@@ -3,7 +3,7 @@
 This code integrates Microsoft’s DXC shader compiler into CRYENGINE, replacing the default FXC path. It enables compiling modern HLSL shaders — including those used for DirectX Raytracing — directly within the engine. The system can compile from source using the DXC COM API, fall back to an external dxc.exe if needed, validate the resulting DXIL bytecode, and generate placeholder shaders when source or compiled files aren’t available. While it was developed with ray tracing in mind, it can be adapted to compile any .hlsl shader for CRYENGINE.
 
 ## Requirements
-------------
+
 
 *   **CRYENGINE 5.7** source code.
     
@@ -23,7 +23,7 @@ This code integrates Microsoft’s DXC shader compiler into CRYENGINE, replacing
     
 
 ## What it does
-------------
+
 
 *   **Modern HLSL compilation:** Uses the DXC COM API to compile HLSL 6.x shaders (including DXR libraries with target lib\_6\_3).
     
@@ -39,7 +39,7 @@ This code integrates Microsoft’s DXC shader compiler into CRYENGINE, replacing
     
 
 ## Usage
------
+
 
 **Place your shaders:**
 
@@ -56,13 +56,10 @@ This code integrates Microsoft’s DXC shader compiler into CRYENGINE, replacing
     
 
 **Compile at init:**
-CCompiler compiler;
-if (!compiler.CompileRayTracingShaders())
-{
-        CryLogAlways("\[Ray Tracing\] Compilation failed; check logs for DXC errors.");
-    }
-    // Use compiler.m\_rayGenShaderBytecode, etc. for pipeline creation
-    _**Create DXR state objects:**
+
+_CCompiler compiler;if (!compiler.CompileRayTracingShaders()){    CryLogAlways("\[Ray Tracing\] Compilation failed; check logs for DXC errors.");}// Use compiler.m\_rayGenShaderBytecode, etc. for pipeline creation_
+
+**Create DXR state objects:**
 
 *   Feed D3D12\_SHADER\_BYTECODE structures with .data() and .size() from the compiler’s bytecode vectors.
     
@@ -77,7 +74,7 @@ if (!compiler.CompileRayTracingShaders())
     
 
 ## Extending beyond ray tracing
-----------------------------
+
 
 You can call CompileShaderWithDXCAPI directly for any shader type and profile:
 
@@ -92,7 +89,7 @@ _{_
 _}_
 
 ## Notes and tips
---------------
+
 
 *   Add -I arguments if your shaders use relative includes:
     
@@ -107,6 +104,6 @@ _arguments.push\_back(L"-I");arguments.push\_back(wShaderDir);_
     
 
 ## Disclaimer
-----------
+
 
 This code was built as part of hardware‑accelerated ray tracing for CRYENGINE. Using it for other purposes has not been extensively tested.
