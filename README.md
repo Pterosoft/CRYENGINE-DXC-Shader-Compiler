@@ -1,8 +1,8 @@
-#CRYENGINE DXC Shader Compiler
+# CRYENGINE DXC Shader Compiler
 
 This code integrates Microsoft’s DXC shader compiler into CRYENGINE, replacing the default FXC path. It enables compiling modern HLSL shaders — including those used for DirectX Raytracing — directly within the engine. The system can compile from source using the DXC COM API, fall back to an external dxc.exe if needed, validate the resulting DXIL bytecode, and generate placeholder shaders when source or compiled files aren’t available. While it was developed with ray tracing in mind, it can be adapted to compile any .hlsl shader for CRYENGINE.
 
-##Requirements
+## Requirements
 ------------
 
 *   **CRYENGINE 5.7** source code.
@@ -22,7 +22,7 @@ This code integrates Microsoft’s DXC shader compiler into CRYENGINE, replacing
 *   (Optional) Install the Windows SDK with dxc.exe for external fallback.
     
 
-##What it does
+## What it does
 ------------
 
 *   **Modern HLSL compilation:** Uses the DXC COM API to compile HLSL 6.x shaders (including DXR libraries with target lib\_6\_3).
@@ -38,7 +38,7 @@ This code integrates Microsoft’s DXC shader compiler into CRYENGINE, replacing
 *   **Pipeline‑ready metadata:** Stores bytecode and size for direct use in pipeline/state object creation.
     
 
-##Usage
+## Usage
 -----
 
 **Place your shaders:**
@@ -69,7 +69,7 @@ This code integrates Microsoft’s DXC shader compiler into CRYENGINE, replacing
 *   Place precompiled .cso files in the same directory for automatic loading if DXC compilation fails.
     
 
-##Extending beyond ray tracing
+## Extending beyond ray tracing
 ----------------------------
 
 You can call CompileShaderWithDXCAPI directly for any shader type and profile:
@@ -84,7 +84,7 @@ _{_
 
 _}_
 
-##Notes and tips
+## Notes and tips
 --------------
 
 *   Add -I arguments if your shaders use relative includes:
@@ -99,7 +99,7 @@ _arguments.push\_back(L"-I");arguments.push\_back(wShaderDir);_
 *   Windows‑only implementation — designed for D3D12 targets.
     
 
-##Disclaimer
+## Disclaimer
 ----------
 
 This code was built as part of hardware‑accelerated ray tracing for CRYENGINE. Using it for other purposes has not been extensively tested.
